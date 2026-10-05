@@ -2148,6 +2148,23 @@
     return {ok:true,qty:Number(qty)*factor,exact:true};
   }
   function coreProduct(id){ return RM_CORE.products.find(p=>p.id===id)||null; }
+  function coreFindProductByBarcode(code){
+    const c=String(code||'').replace(/[\\s-]/g,'').trim();
+    if(!c) return null;
+    return (RM_CORE.products||[]).find(p=>{
+      const codes=[];
+      if(p.barcode) codes.push(p.barcode);
+      if(Array.isArray(p.barcodes)) codes.push(...p.barcodes);
+      return codes.some(v=>String(v||'').replace(/[\\s-]/g,'').trim()===c);
+    }) || null;
+  }
+  function coreAddProductBatch(productId,qty=1,unit='pcs',meta={}){
+    const p=coreProduct(productId); if(!p) return null;
+    p.batches=p.batches||[];
+    const batch={id:'b_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),qty:Number(qty)||1,unit:unit||'pcs',...meta};
+    p.batches.push(batch);
+    return batch;
+  }
   function coreAvailable(productId, unit){
     const p=coreProduct(productId); if(!p) return {status:'UNKNOWN',qty:0};
     let total=0, exact=true;
@@ -2774,16 +2791,7 @@
      Business result handling remains untouched until the next verified change. */
   const RM_SCANNER_CAMERA={stream:null,detector:null,running:false,busy:false,lastCode:'',lastAt:0};
   let RM_SCANNER_PENDING_CODE='';
-  function scannerFindProductByCode(code){
-    const c=String(code||'').replace(/[\\s-]/g,'').trim();
-    if(!c) return null;
-    return (RM_CORE.products||[]).find(p=>{
-      const codes=[];
-      if(p.barcode) codes.push(p.barcode);
-      if(Array.isArray(p.barcodes)) codes.push(...p.barcodes);
-      return codes.some(v=>String(v||'').replace(/[\\s-]/g,'').trim()===c);
-    }) || null;
-  }
+  function scannerFindProductByCode(code){ return coreFindProductByBarcode(code); }
   function scannerOpenNewProduct(code){
     RM_SCANNER_PENDING_CODE=String(code||'').replace(/[\\s-]/g,'').trim();
     RM_PRODUCT_PICKED_ID=null;
@@ -2827,8 +2835,7 @@
     box.querySelector('[data-scan-add]')?.addEventListener('click',()=>{
       const product=coreProduct(p.id);
       if(!product)return;
-      product.batches=product.batches||[];
-      product.batches.push({id:'b_scan_'+Date.now(),qty:1,unit:'pcs',source:'scanner'});
+      coreAddProductBatch(p.id,1,'pcs',{source:'scanner'});
       scannerRememberCode(product,code);
       renderProductsCore();
       box.innerHTML='<div class="card border-green-200 bg-green-50">✓ «'+safeName+'» добавлен в продукты.</div>';
@@ -2849,8 +2856,7 @@
       '<div class="flex gap-2 mt-3"><button class="btn-primary flex-1" type="button" data-scan-buy>✓ Отметить купленным</button>'+
       '<button class="btn-secondary flex-1" type="button" data-scan-buy-cancel>Отмена</button></div></div>';
     box.querySelector('[data-scan-buy]')?.addEventListener('click',()=>{
-      const live=(RM_CORE.shoppingItems||[]).find(x=>x.id===item.id);
-      if(live){ live.bought=true; renderShoppingCore(); }
+      if(coreToggleBought(item.id)){ renderShoppingCore(); }
       box.innerHTML='<div class="card border-green-200 bg-green-50">✓ Покупка подтверждена.</div>';
       toastRM('«'+p.name+'» отмечено купленным');
     });
