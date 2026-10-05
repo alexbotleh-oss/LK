@@ -2800,15 +2800,7 @@
       scannerDiag('camera-error',{stage:'detector'});return;
     }
     try{
-      const requestedFormats=['qr_code','data_matrix','ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf'];
-      let supportedFormats=requestedFormats;
-      if(typeof BarcodeDetector.getSupportedFormats==='function'){
-        const browserFormats=await BarcodeDetector.getSupportedFormats();
-        supportedFormats=requestedFormats.filter(f=>browserFormats.includes(f));
-      }
-      if(!supportedFormats.length) throw new Error('Нет поддерживаемых форматов штрихкода');
-      cam.detector=new BarcodeDetector({formats:supportedFormats});
-      scannerDiag('detector-formats',{requested:requestedFormats,supported:supportedFormats});
+      cam.detector=new BarcodeDetector({formats:['qr_code','ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf']});
       scannerDiag('camera-start-request',{context:RM.scanContext||'products'});
       cam.stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});
       el.video.srcObject=cam.stream; await el.video.play(); cam.running=true;
