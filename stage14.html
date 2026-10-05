@@ -2773,6 +2773,44 @@
   /* B77 SCANNER CAMERA — change 1: camera/decode layer only.
      Business result handling remains untouched until the next verified change. */
   const RM_SCANNER_CAMERA={stream:null,detector:null,running:false,busy:false,lastCode:'',lastAt:0};
+  let RM_SCANNER_PENDING_CODE='';
+  function scannerFindProductByCode(code){
+    const c=String(code||'').replace(/[\\s-]/g,'').trim();
+    if(!c) return null;
+    return (RM_CORE.products||[]).find(p=>{
+      const codes=[];
+      if(p.barcode) codes.push(p.barcode);
+      if(Array.isArray(p.barcodes)) codes.push(...p.barcodes);
+      return codes.some(v=>String(v||'').replace(/[\\s-]/g,'').trim()===c);
+    }) || null;
+  }
+  function scannerOpenNewProduct(code){
+    RM_SCANNER_PENDING_CODE=String(code||'').replace(/[\\s-]/g,'').trim();
+    RM_PRODUCT_PICKED_ID=null;
+    const ov=document.getElementById('productEditOverlay');
+    if(!ov) { toastRM('Форма продукта недоступна'); return; }
+    ov.dataset.cardIndex='-1';
+    const name=document.getElementById('peName');
+    const qty=document.getElementById('peQty');
+    if(name) name.value='';
+    if(qty) qty.value='1';
+    const box=document.getElementById('peAutocomplete'); if(box) box.hidden=true;
+    ov.classList.add('open');
+  }
+  function processStage14ScannerCode(code){
+    const raw=String(code||'').trim().replace(/[\\s-]/g,'');
+    if(!raw){ toastRM('Код не распознан'); return; }
+    const p=scannerFindProductByCode(raw);
+    RM_SCANNER_PENDING_CODE=raw;
+    if(p){
+      const card=findProductCardById(p.id);
+      toastRM('Код найден: '+p.name);
+      if(card) openProductEdit(card);
+      else openProductEditById(p.id);
+      return;
+    }
+    scannerOpenNewProduct(raw);
+  }
   function scannerDiag(name,data){try{window.B77Diag?.scannerEvent(name,data);}catch(_){}}
   function scannerCameraElements(){
     const screen=document.querySelector('[data-screen="scanner"]');
@@ -2832,7 +2870,7 @@
             if(el.status)el.status.textContent='Код распознан: '+raw;
             scannerDiag('code-detected',{code:raw,format:results[0].format||'',context:RM.scanContext||'products'});
             stopScannerCamera('code-detected');
-            toastRM('Код распознан: '+raw);
+            processStage14ScannerCode(raw);
             cam.busy=false; return;
           }
         }else{
@@ -3238,6 +3276,11 @@
     if(!p){toastRM('Выберите продукт из списка');return;}
     p.name=name; p.batches=p.batches||[];
     if(p.batches[0]) p.batches[0].qty=qty; else p.batches.push({id:'b_'+Date.now(),qty,unit:'pcs',source:'manual'});
+    if(RM_SCANNER_PENDING_CODE){
+      p.barcode=RM_SCANNER_PENDING_CODE;
+      p.barcodes=Array.from(new Set([...(Array.isArray(p.barcodes)?p.barcodes:[]),RM_SCANNER_PENDING_CODE]));
+      RM_SCANNER_PENDING_CODE='';
+    }
     closeProductEdit(); renderProductsCore(); toastRM(`«${p.name}» сохранён`);
   }
 
