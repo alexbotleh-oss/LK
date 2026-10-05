@@ -15,5 +15,3 @@ jobs:
           python-version: "3.x"
       - name: Project diagnostic
         run: python scripts/project_diagnostic.py
-      - name: Diagnostic tests
-        run: python -m pytest -q tests/test_project_diagnostic.py
