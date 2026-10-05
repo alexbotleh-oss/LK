@@ -2730,6 +2730,7 @@
   setInterval(updateGlobalTimerDock,1000);
 
   function openScanner(context='products') {
+    stopScannerCamera('open');
     RM.scanContext=context;
     const title={
       products:'🧺 Сканер продуктов',
@@ -2838,14 +2839,7 @@
     }catch(err){scannerDiag('decode-error',{name:err?.name||'',message:err?.message||String(err||'')});}
     cam.busy=false; if(cam.running)requestAnimationFrame(scanCameraFrame);
   }
-  function openScanner(context='products'){
-    stopScannerCamera('open'); RM.scanContext=context;
-    const title={products:'🧺 Сканер продуктов',shopping:'🛒 Сканер покупок',qr:'▣ Сканер QR'}[context]||'📷 Сканер';
-    const hint={products:'Штрихкод продукта → локальный продукт / lookup',shopping:'Штрихкод покупки → сопоставление с ShoppingNeed',qr:'QR/штрихкод → локальный поиск и история'}[context]||'';
-    document.getElementById('scannerContextTitle').textContent=title;
-    document.getElementById('scannerContextHint').textContent=hint; showScreen('scanner');
-  }
-  document.querySelectorAll('[data-screen="scanner"] .btn-primary').forEach(btn=>btn.addEventListener('click',startScannerCamera));
+ document.querySelectorAll('[data-screen="scanner"] .btn-primary').forEach(btn=>btn.addEventListener('click',startScannerCamera));
   document.querySelectorAll('[data-screen="scanner"] .btn-secondary').forEach(btn=>btn.addEventListener('click',()=>stopScannerCamera('manual-input')));
   document.addEventListener('visibilitychange',()=>{if(document.hidden)stopScannerCamera('page-hidden');});
   renderLiteCook();
