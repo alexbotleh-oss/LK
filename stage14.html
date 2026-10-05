@@ -1204,7 +1204,7 @@
           </div>
           
           <div class="mt-4 space-y-2">
-            <button class="btn-primary w-full">📷 Считать код камерой</button>
+            <button class="btn-primary w-full" data-scanner-start>📷 Считать код камерой</button>
             <button class="btn-secondary w-full bg-slate-800 text-white">Ручной ввод</button>
           </div>
           
@@ -2842,7 +2842,7 @@
     }catch(err){scannerDiag('decode-error',{name:err?.name||'',message:err?.message||String(err||'')});}
     cam.busy=false; if(cam.running)requestAnimationFrame(scanCameraFrame);
   }
- document.querySelectorAll('[data-screen="scanner"] .btn-primary').forEach(btn=>btn.addEventListener('click',startScannerCamera));
+ document.addEventListener('click',e=>{const btn=e.target.closest('[data-screen="scanner"] [data-scanner-start]');if(!btn)return;scannerDiag('camera-button-click',{context:RM.scanContext||'products'});startScannerCamera();});
   document.querySelectorAll('[data-screen="scanner"] .btn-secondary').forEach(btn=>btn.addEventListener('click',()=>stopScannerCamera('manual-input')));
   document.addEventListener('visibilitychange',()=>{if(document.hidden)stopScannerCamera('page-hidden');});
   renderLiteCook();
