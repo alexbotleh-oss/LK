@@ -2820,7 +2820,9 @@
     if(!el.video||el.video.readyState<2){requestAnimationFrame(scanCameraFrame);return;}
     cam.busy=true;
     try{
+      scannerDiag('detect-called',{readyState:el.video.readyState,videoWidth:el.video.videoWidth,videoHeight:el.video.videoHeight});
       const results=await cam.detector.detect(el.video);
+      scannerDiag('detect-result',{count:Array.isArray(results)?results.length:0,formats:Array.isArray(results)?results.slice(0,3).map(r=>r?.format||''):[],rawValuePresent:Array.isArray(results)?results.some(r=>String(r?.rawValue||'').trim()!==''):false});
       if(results?.length){
         const raw=String(results[0].rawValue||'').trim();
         if(raw){
@@ -2833,6 +2835,8 @@
             toastRM('Код распознан: '+raw);
             cam.busy=false; return;
           }
+        }else{
+          scannerDiag('detect-no-rawValue',{count:results.length,format:results[0]?.format||''});
         }
       }
     }catch(err){scannerDiag('decode-error',{name:err?.name||'',message:err?.message||String(err||'')});}
