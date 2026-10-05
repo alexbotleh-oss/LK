@@ -2770,6 +2770,27 @@
     },{passive:false});
   })();
 
+  /* B77 SCANNER CAMERA — change 2: pass decoded code into the existing product Core. */
+  function handleScannedCode(raw){
+    const code=String(raw||'').trim();
+    if(!code){toastRM('Пустой код');return;}
+    const pool=[...(RM_CORE.products||[]),...(canonicalProducts||[])];
+    const product=pool.find(p=>String(p?.barcode||'').trim()===code);
+    scannerDiag('core-lookup',{code,context:RM.scanContext||'products',found:!!product,productId:product?.id||''});
+    if(product){
+      if((RM.scanContext||'products')==='shopping'){
+        openAddToShopping(String(product.id));
+      }else{
+        showScreen('products');
+        renderProductsCore();
+        openProductEditById(String(product.id));
+      }
+      toastRM('Найден продукт: '+String(product.name||code));
+      return;
+    }
+    toastRM('Код распознан, продукт не найден: '+code);
+  }
+
   /* B77 SCANNER CAMERA — change 1: camera/decode layer only.
      Business result handling remains untouched until the next verified change. */
   const RM_SCANNER_CAMERA={stream:null,detector:null,running:false,busy:false,lastCode:'',lastAt:0};
@@ -2832,7 +2853,7 @@
             if(el.status)el.status.textContent='Код распознан: '+raw;
             scannerDiag('code-detected',{code:raw,format:results[0].format||'',context:RM.scanContext||'products'});
             stopScannerCamera('code-detected');
-            toastRM('Код распознан: '+raw);
+            handleScannedCode(raw);
             cam.busy=false; return;
           }
         }else{
