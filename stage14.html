@@ -1205,7 +1205,7 @@
           
           <div class="mt-4 space-y-2">
             <button class="btn-primary w-full" data-scanner-start>📷 Считать код камерой</button>
-            <button class="btn-secondary w-full bg-slate-800 text-white">Ручной ввод</button>
+            <button class="btn-secondary w-full bg-slate-800 text-white" data-scanner-manual>Ручной ввод</button>
           </div>
           
           <div class="mt-4 p-4 bg-slate-800 rounded-2xl">
@@ -2797,34 +2797,95 @@
     const box=document.getElementById('peAutocomplete'); if(box) box.hidden=true;
     ov.classList.add('open');
   }
+  function scannerRememberCode(p,code){
+    if(!p) return;
+    const raw=String(code||'').replace(/[\\s-]/g,'').trim();
+    if(!raw) return;
+    p.barcode=raw;
+    p.barcodes=Array.from(new Set([...(Array.isArray(p.barcodes)?p.barcodes:[]),raw]));
+  }
+  function scannerRecordHistory(code,context,p){
+    try{
+      const key='rm_stage14_scanner_history_v1';
+      const h=JSON.parse(localStorage.getItem(key)||'[]');
+      h.unshift({code:String(code||''),context:String(context||'products'),found:!!p,name:p?.name||'',at:new Date().toISOString()});
+      localStorage.setItem(key,JSON.stringify(h.slice(0,30)));
+    }catch(_){}
+  }
+  function scannerShowProductChoice(p,code){
+    const safeCode=escapeHtml(code), safeName=escapeHtml(p?.name||'Продукт');
+    const box=document.getElementById('scanResult'); if(!box)return;
+    box.innerHTML='<div class="card" style="border:1px solid #f97316">'+
+      '<div class="font-bold text-slate-900">'+safeName+'</div>'+
+      '<div class="text-xs text-slate-500 mt-1">Штрихкод: '+safeCode+' · найден в локальной базе</div>'+
+      '<div class="flex gap-2 mt-3">'+
+      '<button class="btn-primary flex-1" type="button" data-scan-add>✓ Добавить</button>'+
+      '<button class="btn-secondary flex-1" type="button" data-scan-edit>✎ Редактировать</button>'+
+      '</div>'+
+      '<button class="btn-secondary w-full mt-2" type="button" data-scan-cancel>Отмена</button>'+
+      '</div>';
+    box.querySelector('[data-scan-add]')?.addEventListener('click',()=>{
+      const product=coreProduct(p.id);
+      if(!product)return;
+      product.batches=product.batches||[];
+      product.batches.push({id:'b_scan_'+Date.now(),qty:1,unit:'pcs',source:'scanner'});
+      scannerRememberCode(product,code);
+      renderProductsCore();
+      box.innerHTML='<div class="card border-green-200 bg-green-50">✓ «'+safeName+'» добавлен в продукты.</div>';
+      toastRM('Добавлено: '+p.name);
+    });
+    box.querySelector('[data-scan-edit]')?.addEventListener('click',()=>{
+      RM_SCANNER_PENDING_CODE=String(code||'');
+      const card=findProductCardById(p.id);
+      if(card) openProductEdit(card); else openProductEditById(p.id);
+    });
+    box.querySelector('[data-scan-cancel]')?.addEventListener('click',()=>{box.innerHTML='';});
+  }
+  function scannerShowShoppingChoice(p,item,code){
+    const box=document.getElementById('scanResult'); if(!box)return;
+    box.innerHTML='<div class="card" style="border:1px solid #22c55e">'+
+      '<div class="font-bold text-slate-900">«'+escapeHtml(p.name)+'»</div>'+
+      '<div class="text-xs text-slate-500 mt-1">Найдена позиция в покупках: '+escapeHtml(String(item.qty||0))+' '+escapeHtml(shoppingUnitLabel(item.unit))+'</div>'+
+      '<div class="flex gap-2 mt-3"><button class="btn-primary flex-1" type="button" data-scan-buy>✓ Отметить купленным</button>'+
+      '<button class="btn-secondary flex-1" type="button" data-scan-buy-cancel>Отмена</button></div></div>';
+    box.querySelector('[data-scan-buy]')?.addEventListener('click',()=>{
+      const live=(RM_CORE.shoppingItems||[]).find(x=>x.id===item.id);
+      if(live){ live.bought=true; renderShoppingCore(); }
+      box.innerHTML='<div class="card border-green-200 bg-green-50">✓ Покупка подтверждена.</div>';
+      toastRM('«'+p.name+'» отмечено купленным');
+    });
+    box.querySelector('[data-scan-buy-cancel]')?.addEventListener('click',()=>{box.innerHTML='';});
+  }
+  function scannerShowQrResult(code,p){
+    const box=document.getElementById('scanResult'); if(!box)return;
+    box.innerHTML='<div class="card">'+
+      '<div class="font-bold text-slate-900">'+(p?'Код найден: '+escapeHtml(p.name):'Код не найден локально')+'</div>'+
+      '<div class="text-xs text-slate-500 mt-1">Код: '+escapeHtml(code)+'</div>'+
+      '<div class="text-xs text-slate-500 mt-2">QR-контекст: автоматическое создание продукта отключено. Код сохранён в истории.</div>'+
+      '</div>';
+  }
   function processStage14ScannerCode(code){
     const raw=String(code||'').trim().replace(/[\\s-]/g,'');
     if(!raw){ toastRM('Код не распознан'); return; }
     const p=scannerFindProductByCode(raw);
-    if(RM.scanContext==='qr'){
-      toastRM(p ? 'Код найден: '+p.name : 'Код не найден локально');
+    const ctx=RM.scanContext||'products';
+    scannerRecordHistory(raw,ctx,p);
+    if(ctx==='qr'){
+      scannerShowQrResult(raw,p);
       return;
     }
-    if(RM.scanContext==='shopping'){
+    if(ctx==='shopping'){
       if(!p){ toastRM('Код не найден локально'); return; }
       const item=(RM_CORE.shoppingItems||[]).find(x=>x.product_id===p.id&&!x.bought);
-      if(item){
-        item.bought=true;
-        renderShoppingCore();
-        toastRM('«'+p.name+'» отмечено купленным');
-      }else{
-        toastRM('«'+p.name+'» нет в списке покупок');
-      }
+      if(!item){ toastRM('«'+p.name+'» нет в списке покупок'); return; }
+      scannerShowShoppingChoice(p,item,raw);
+      return;
+    }
+    if(p){
+      scannerShowProductChoice(p,raw);
       return;
     }
     RM_SCANNER_PENDING_CODE=raw;
-    if(p){
-      const card=findProductCardById(p.id);
-      toastRM('Код найден: '+p.name);
-      if(card) openProductEdit(card);
-      else openProductEditById(p.id);
-      return;
-    }
     scannerOpenNewProduct(raw);
   }
   function scannerDiag(name,data){try{window.B77Diag?.scannerEvent(name,data);}catch(_){}}
@@ -2896,8 +2957,27 @@
     }catch(err){scannerDiag('decode-error',{name:err?.name||'',message:err?.message||String(err||'')});}
     cam.busy=false; if(cam.running)requestAnimationFrame(scanCameraFrame);
   }
- document.addEventListener('click',e=>{const btn=e.target.closest('[data-screen="scanner"] [data-scanner-start]');if(!btn)return;scannerDiag('camera-button-click',{context:RM.scanContext||'products'});startScannerCamera();});
-  document.querySelectorAll('[data-screen="scanner"] .btn-secondary').forEach(btn=>btn.addEventListener('click',()=>stopScannerCamera('manual-input')));
+ document.addEventListener('click',e=>{
+    const start=e.target.closest('[data-screen="scanner"] [data-scanner-start]');
+    if(start){scannerDiag('camera-button-click',{context:RM.scanContext||'products'});startScannerCamera();return;}
+    const manual=e.target.closest('[data-screen="scanner"] [data-scanner-manual]');
+    if(manual){
+      stopScannerCamera('manual-input');
+      const box=document.getElementById('scanResult');
+      if(box){
+        box.innerHTML='<div class="card">'+
+          '<label class="text-xs font-semibold text-slate-500">Штрихкод / QR</label>'+
+          '<input id="stage14ManualScan" class="w-full border border-slate-200 rounded-xl p-3 mt-2" inputmode="text" autocomplete="off" placeholder="Введите код">'+
+          '<button class="btn-primary w-full mt-2" type="button" id="stage14ManualScanBtn">Найти</button>'+
+          '</div>';
+        const input=document.getElementById('stage14ManualScan');
+        const submit=()=>{const v=input?.value?.trim()||''; if(v) processStage14ScannerCode(v); else toastRM('Введите код');};
+        document.getElementById('stage14ManualScanBtn')?.addEventListener('click',submit);
+        input?.addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();submit();}});
+        input?.focus();
+      }
+    }
+  });
   document.addEventListener('visibilitychange',()=>{if(document.hidden)stopScannerCamera('page-hidden');});
   renderLiteCook();
   updateLiteSelectionVisuals();
