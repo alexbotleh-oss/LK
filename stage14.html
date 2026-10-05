@@ -2801,6 +2801,22 @@
     const raw=String(code||'').trim().replace(/[\\s-]/g,'');
     if(!raw){ toastRM('Код не распознан'); return; }
     const p=scannerFindProductByCode(raw);
+    if(RM.scanContext==='qr'){
+      toastRM(p ? 'Код найден: '+p.name : 'Код не найден локально');
+      return;
+    }
+    if(RM.scanContext==='shopping'){
+      if(!p){ toastRM('Код не найден локально'); return; }
+      const item=(RM_CORE.shoppingItems||[]).find(x=>x.product_id===p.id&&!x.bought);
+      if(item){
+        item.bought=true;
+        renderShoppingCore();
+        toastRM('«'+p.name+'» отмечено купленным');
+      }else{
+        toastRM('«'+p.name+'» нет в списке покупок');
+      }
+      return;
+    }
     RM_SCANNER_PENDING_CODE=raw;
     if(p){
       const card=findProductCardById(p.id);
