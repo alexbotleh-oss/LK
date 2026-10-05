@@ -1193,8 +1193,10 @@
           </div>
           
           <div class="scanner-viewfinder">
+            <video data-scanner-video autoplay muted playsinline style="width:100%;height:100%;object-fit:cover;border-radius:20px;display:block;background:#000"></video>
             <div class="scan-line"></div>
           </div>
+          <div class="scanner-camera-status text-center text-xs text-slate-400 mt-2" role="status">Камера не запущена</div>
           
           <div class="text-center px-6 mt-4">
             <div class="text-sm font-semibold mb-1">Камера готова</div>
@@ -2768,13 +2770,84 @@
     },{passive:false});
   })();
 
-  /* Make the scanner camera button explicit about its test state. */
-  document.querySelectorAll('[data-screen="scanner"] .btn-primary').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      toastRM('Камера в HTML-контроле: на телефоне потребуется HTTPS и разрешение камеры');
-    });
-  });
-
+  /* B77 SCANNER CAMERA — change 1: camera/decode layer only.
+     Business result handling remains untouched until the next verified change. */
+  const RM_SCANNER_CAMERA={stream:null,detector:null,running:false,busy:false,lastCode:'',lastAt:0};
+  function scannerDiag(name,data){try{window.B77Diag?.scannerEvent(name,data);}catch(_){}}
+  function scannerCameraElements(){
+    const screen=document.querySelector('[data-screen="scanner"]');
+    return {screen,viewfinder:screen?.querySelector('.scanner-viewfinder'),status:screen?.querySelector('.scanner-camera-status'),video:screen?.querySelector('video[data-scanner-video]')};
+  }
+  function stopScannerCamera(reason='stop'){
+    const cam=RM_SCANNER_CAMERA; cam.running=false;
+    if(cam.stream){cam.stream.getTracks().forEach(track=>track.stop());cam.stream=null;}
+    const el=scannerCameraElements();
+    if(el.video){el.video.pause();el.video.srcObject=null;}
+    if(el.status) el.status.textContent='Камера остановлена';
+    scannerDiag('camera-stopped',{reason});
+  }
+  async function startScannerCamera(){
+    const cam=RM_SCANNER_CAMERA, el=scannerCameraElements();
+    if(cam.running)return;
+    if(!el.video||!el.status){toastRM('Элемент камеры не найден');scannerDiag('camera-error',{stage:'elements'});return;}
+    if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia){
+      el.status.textContent='Камера недоступна: нужен HTTPS и mediaDevices';
+      toastRM('Камера недоступна в этом окружении');
+      scannerDiag('camera-error',{stage:'capability',secureContext:!!window.isSecureContext,mediaDevices:!!navigator.mediaDevices?.getUserMedia});return;
+    }
+    if(typeof window.BarcodeDetector!=='function'){
+      el.status.textContent='BarcodeDetector недоступен'; toastRM('Распознавание штрихкодов недоступно');
+      scannerDiag('camera-error',{stage:'detector'});return;
+    }
+    try{
+      cam.detector=new BarcodeDetector({formats:['qr_code','ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf']});
+      scannerDiag('camera-start-request',{context:RM.scanContext||'products'});
+      cam.stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});
+      el.video.srcObject=cam.stream; await el.video.play(); cam.running=true;
+      el.status.textContent='Камера активна — наведите на код';
+      scannerDiag('camera-started',{tracks:cam.stream.getVideoTracks().map(t=>t.getSettings?.()||{})});
+      scanCameraFrame();
+    }catch(err){
+      stopScannerCamera('start-error'); el.status.textContent='Не удалось открыть камеру';
+      toastRM('Не удалось открыть камеру: '+(err?.name||'ошибка'));
+      scannerDiag('camera-error',{stage:'getUserMedia',name:err?.name||'',message:err?.message||String(err||'')});
+    }
+  }
+  async function scanCameraFrame(){
+    const cam=RM_SCANNER_CAMERA;
+    if(!cam.running||cam.busy)return;
+    const el=scannerCameraElements();
+    if(!el.video||el.video.readyState<2){requestAnimationFrame(scanCameraFrame);return;}
+    cam.busy=true;
+    try{
+      const results=await cam.detector.detect(el.video);
+      if(results?.length){
+        const raw=String(results[0].rawValue||'').trim();
+        if(raw){
+          const now=Date.now();
+          if(raw!==cam.lastCode||now-cam.lastAt>1500){
+            cam.lastCode=raw; cam.lastAt=now;
+            if(el.status)el.status.textContent='Код распознан: '+raw;
+            scannerDiag('code-detected',{code:raw,format:results[0].format||'',context:RM.scanContext||'products'});
+            stopScannerCamera('code-detected');
+            toastRM('Код распознан: '+raw);
+            cam.busy=false; return;
+          }
+        }
+      }
+    }catch(err){scannerDiag('decode-error',{name:err?.name||'',message:err?.message||String(err||'')});}
+    cam.busy=false; if(cam.running)requestAnimationFrame(scanCameraFrame);
+  }
+  function openScanner(context='products'){
+    stopScannerCamera('open'); RM.scanContext=context;
+    const title={products:'🧺 Сканер продуктов',shopping:'🛒 Сканер покупок',qr:'▣ Сканер QR'}[context]||'📷 Сканер';
+    const hint={products:'Штрихкод продукта → локальный продукт / lookup',shopping:'Штрихкод покупки → сопоставление с ShoppingNeed',qr:'QR/штрихкод → локальный поиск и история'}[context]||'';
+    document.getElementById('scannerContextTitle').textContent=title;
+    document.getElementById('scannerContextHint').textContent=hint; showScreen('scanner');
+  }
+  document.querySelectorAll('[data-screen="scanner"] .btn-primary').forEach(btn=>btn.addEventListener('click',startScannerCamera));
+  document.querySelectorAll('[data-screen="scanner"] .btn-secondary').forEach(btn=>btn.addEventListener('click',()=>stopScannerCamera('manual-input')));
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)stopScannerCamera('page-hidden');});
   renderLiteCook();
   updateLiteSelectionVisuals();
   // FIX1: product filter/sort state must be initialized before the first render.
@@ -3637,5 +3710,6 @@ if ('serviceWorker' in navigator) {
 .products-toolbar-btn{justify-content:center;border-radius:12px !important;}
 .products-toolbar-add{display:flex;align-items:center;justify-content:center;font-weight:700;border-radius:12px !important;}
 </style>
+  <script src="./src/web/diagnostics.js"></script>
 </body>
 </html>
