@@ -1193,8 +1193,10 @@
           </div>
           
           <div class="scanner-viewfinder">
+            <video data-scanner-video autoplay muted playsinline style="width:100%;height:100%;object-fit:cover;border-radius:20px;display:block;background:#000"></video>
             <div class="scan-line"></div>
           </div>
+          <div class="scanner-camera-status text-center text-xs text-slate-400 mt-2" role="status">Камера не запущена</div>
           
           <div class="text-center px-6 mt-4">
             <div class="text-sm font-semibold mb-1">Камера готова</div>
@@ -1202,8 +1204,8 @@
           </div>
           
           <div class="mt-4 space-y-2">
-            <button class="btn-primary w-full">📷 Считать код камерой</button>
-            <button class="btn-secondary w-full bg-slate-800 text-white">Ручной ввод</button>
+            <button class="btn-primary w-full" data-scanner-start>📷 Считать код камерой</button>
+            <button class="btn-secondary w-full bg-slate-800 text-white" data-scanner-manual>Ручной ввод</button>
           </div>
           
           <div class="mt-4 p-4 bg-slate-800 rounded-2xl">
@@ -2146,6 +2148,23 @@
     return {ok:true,qty:Number(qty)*factor,exact:true};
   }
   function coreProduct(id){ return RM_CORE.products.find(p=>p.id===id)||null; }
+  function coreFindProductByBarcode(code){
+    const c=String(code||'').replace(/[\\s-]/g,'').trim();
+    if(!c) return null;
+    return (RM_CORE.products||[]).find(p=>{
+      const codes=[];
+      if(p.barcode) codes.push(p.barcode);
+      if(Array.isArray(p.barcodes)) codes.push(...p.barcodes);
+      return codes.some(v=>String(v||'').replace(/[\\s-]/g,'').trim()===c);
+    }) || null;
+  }
+  function coreAddProductBatch(productId,qty=1,unit='pcs',meta={}){
+    const p=coreProduct(productId); if(!p) return null;
+    p.batches=p.batches||[];
+    const batch={id:'b_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),qty:Number(qty)||1,unit:unit||'pcs',...meta};
+    p.batches.push(batch);
+    return batch;
+  }
   function coreAvailable(productId, unit){
     const p=coreProduct(productId); if(!p) return {status:'UNKNOWN',qty:0};
     let total=0, exact=true;
@@ -2768,13 +2787,204 @@
     },{passive:false});
   })();
 
-  /* Make the scanner camera button explicit about its test state. */
-  document.querySelectorAll('[data-screen="scanner"] .btn-primary').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      toastRM('Камера в HTML-контроле: на телефоне потребуется HTTPS и разрешение камеры');
+  /* B77 SCANNER CAMERA — change 1: camera/decode layer only.
+     Business result handling remains untouched until the next verified change. */
+  const RM_SCANNER_CAMERA={stream:null,detector:null,running:false,busy:false,lastCode:'',lastAt:0};
+  let RM_SCANNER_PENDING_CODE='';
+  function scannerFindProductByCode(code){ return coreFindProductByBarcode(code); }
+  function scannerOpenNewProduct(code){
+    RM_SCANNER_PENDING_CODE=String(code||'').replace(/[\\s-]/g,'').trim();
+    RM_PRODUCT_PICKED_ID=null;
+    const ov=document.getElementById('productEditOverlay');
+    if(!ov) { toastRM('Форма продукта недоступна'); return; }
+    ov.dataset.cardIndex='-1';
+    const name=document.getElementById('peName');
+    const qty=document.getElementById('peQty');
+    if(name) name.value='';
+    if(qty) qty.value='1';
+    const box=document.getElementById('peAutocomplete'); if(box) box.hidden=true;
+    ov.classList.add('open');
+  }
+  function scannerRememberCode(p,code){
+    if(!p) return;
+    const raw=String(code||'').replace(/[\\s-]/g,'').trim();
+    if(!raw) return;
+    p.barcode=raw;
+    p.barcodes=Array.from(new Set([...(Array.isArray(p.barcodes)?p.barcodes:[]),raw]));
+  }
+  function scannerRecordHistory(code,context,p){
+    try{
+      const key='rm_stage14_scanner_history_v1';
+      const h=JSON.parse(localStorage.getItem(key)||'[]');
+      h.unshift({code:String(code||''),context:String(context||'products'),found:!!p,name:p?.name||'',at:new Date().toISOString()});
+      localStorage.setItem(key,JSON.stringify(h.slice(0,30)));
+    }catch(_){}
+  }
+  function scannerShowProductChoice(p,code){
+    const safeCode=escapeHtml(code), safeName=escapeHtml(p?.name||'Продукт');
+    const box=document.getElementById('scanResult'); if(!box)return;
+    box.innerHTML='<div class="card" style="border:1px solid #f97316">'+
+      '<div class="font-bold text-slate-900">'+safeName+'</div>'+
+      '<div class="text-xs text-slate-500 mt-1">Штрихкод: '+safeCode+' · найден в локальной базе</div>'+
+      '<div class="flex gap-2 mt-3">'+
+      '<button class="btn-primary flex-1" type="button" data-scan-add>✓ Добавить</button>'+
+      '<button class="btn-secondary flex-1" type="button" data-scan-edit>✎ Редактировать</button>'+
+      '</div>'+
+      '<button class="btn-secondary w-full mt-2" type="button" data-scan-cancel>Отмена</button>'+
+      '</div>';
+    box.querySelector('[data-scan-add]')?.addEventListener('click',()=>{
+      const product=coreProduct(p.id);
+      if(!product)return;
+      coreAddProductBatch(p.id,1,'pcs',{source:'scanner'});
+      scannerRememberCode(product,code);
+      renderProductsCore();
+      box.innerHTML='<div class="card border-green-200 bg-green-50">✓ «'+safeName+'» добавлен в продукты.</div>';
+      toastRM('Добавлено: '+p.name);
     });
+    box.querySelector('[data-scan-edit]')?.addEventListener('click',()=>{
+      RM_SCANNER_PENDING_CODE=String(code||'');
+      const card=findProductCardById(p.id);
+      if(card) openProductEdit(card); else openProductEditById(p.id);
+    });
+    box.querySelector('[data-scan-cancel]')?.addEventListener('click',()=>{box.innerHTML='';});
+  }
+  function scannerShowShoppingChoice(p,item,code){
+    const box=document.getElementById('scanResult'); if(!box)return;
+    box.innerHTML='<div class="card" style="border:1px solid #22c55e">'+
+      '<div class="font-bold text-slate-900">«'+escapeHtml(p.name)+'»</div>'+
+      '<div class="text-xs text-slate-500 mt-1">Найдена позиция в покупках: '+escapeHtml(String(item.qty||0))+' '+escapeHtml(shoppingUnitLabel(item.unit))+'</div>'+
+      '<div class="flex gap-2 mt-3"><button class="btn-primary flex-1" type="button" data-scan-buy>✓ Отметить купленным</button>'+
+      '<button class="btn-secondary flex-1" type="button" data-scan-buy-cancel>Отмена</button></div></div>';
+    box.querySelector('[data-scan-buy]')?.addEventListener('click',()=>{
+      if(coreToggleBought(item.id)){ renderShoppingCore(); }
+      box.innerHTML='<div class="card border-green-200 bg-green-50">✓ Покупка подтверждена.</div>';
+      toastRM('«'+p.name+'» отмечено купленным');
+    });
+    box.querySelector('[data-scan-buy-cancel]')?.addEventListener('click',()=>{box.innerHTML='';});
+  }
+  function scannerShowQrResult(code,p){
+    const box=document.getElementById('scanResult'); if(!box)return;
+    box.innerHTML='<div class="card">'+
+      '<div class="font-bold text-slate-900">'+(p?'Код найден: '+escapeHtml(p.name):'Код не найден локально')+'</div>'+
+      '<div class="text-xs text-slate-500 mt-1">Код: '+escapeHtml(code)+'</div>'+
+      '<div class="text-xs text-slate-500 mt-2">QR-контекст: автоматическое создание продукта отключено. Код сохранён в истории.</div>'+
+      '</div>';
+  }
+  function processStage14ScannerCode(code){
+    const raw=String(code||'').trim().replace(/[\\s-]/g,'');
+    if(!raw){ toastRM('Код не распознан'); return; }
+    const p=scannerFindProductByCode(raw);
+    const ctx=RM.scanContext||'products';
+    scannerRecordHistory(raw,ctx,p);
+    if(ctx==='qr'){
+      scannerShowQrResult(raw,p);
+      return;
+    }
+    if(ctx==='shopping'){
+      if(!p){ toastRM('Код не найден локально'); return; }
+      const item=(RM_CORE.shoppingItems||[]).find(x=>x.product_id===p.id&&!x.bought);
+      if(!item){ toastRM('«'+p.name+'» нет в списке покупок'); return; }
+      scannerShowShoppingChoice(p,item,raw);
+      return;
+    }
+    if(p){
+      scannerShowProductChoice(p,raw);
+      return;
+    }
+    RM_SCANNER_PENDING_CODE=raw;
+    scannerOpenNewProduct(raw);
+  }
+  function scannerDiag(name,data){try{window.B77Diag?.scannerEvent(name,data);}catch(_){}}
+  function scannerCameraElements(){
+    const screen=document.querySelector('[data-screen="scanner"]');
+    return {screen,viewfinder:screen?.querySelector('.scanner-viewfinder'),status:screen?.querySelector('.scanner-camera-status'),video:screen?.querySelector('video[data-scanner-video]')};
+  }
+  function stopScannerCamera(reason='stop'){
+    const cam=RM_SCANNER_CAMERA; cam.running=false;
+    if(cam.stream){cam.stream.getTracks().forEach(track=>track.stop());cam.stream=null;}
+    const el=scannerCameraElements();
+    if(el.video){el.video.pause();el.video.srcObject=null;}
+    if(el.status) el.status.textContent='Камера остановлена';
+    scannerDiag('camera-stopped',{reason});
+  }
+  async function startScannerCamera(){
+    const cam=RM_SCANNER_CAMERA, el=scannerCameraElements();
+    if(cam.running)return;
+    if(!el.video||!el.status){toastRM('Элемент камеры не найден');scannerDiag('camera-error',{stage:'elements'});return;}
+    if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia){
+      el.status.textContent='Камера недоступна: нужен HTTPS и mediaDevices';
+      toastRM('Камера недоступна в этом окружении');
+      scannerDiag('camera-error',{stage:'capability',secureContext:!!window.isSecureContext,mediaDevices:!!navigator.mediaDevices?.getUserMedia});return;
+    }
+    if(typeof window.BarcodeDetector!=='function'){
+      el.status.textContent='BarcodeDetector недоступен'; toastRM('Распознавание штрихкодов недоступно');
+      scannerDiag('camera-error',{stage:'detector'});return;
+    }
+    try{
+      cam.detector=new BarcodeDetector({formats:['qr_code','ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf']});
+      scannerDiag('camera-start-request',{context:RM.scanContext||'products'});
+      cam.stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});
+      el.video.srcObject=cam.stream; await el.video.play(); cam.running=true;
+      el.status.textContent='Камера активна — наведите на код';
+      scannerDiag('camera-started',{tracks:cam.stream.getVideoTracks().map(t=>t.getSettings?.()||{})});
+      scanCameraFrame();
+    }catch(err){
+      stopScannerCamera('start-error'); el.status.textContent='Не удалось открыть камеру';
+      toastRM('Не удалось открыть камеру: '+(err?.name||'ошибка'));
+      scannerDiag('camera-error',{stage:'getUserMedia',name:err?.name||'',message:err?.message||String(err||'')});
+    }
+  }
+  async function scanCameraFrame(){
+    const cam=RM_SCANNER_CAMERA;
+    if(!cam.running||cam.busy)return;
+    const el=scannerCameraElements();
+    if(!el.video||el.video.readyState<2){requestAnimationFrame(scanCameraFrame);return;}
+    cam.busy=true;
+    try{
+      scannerDiag('detect-called',{readyState:el.video.readyState,videoWidth:el.video.videoWidth,videoHeight:el.video.videoHeight});
+      const results=await cam.detector.detect(el.video);
+      scannerDiag('detect-result',{count:Array.isArray(results)?results.length:0,formats:Array.isArray(results)?results.slice(0,3).map(r=>r?.format||''):[],rawValuePresent:Array.isArray(results)?results.some(r=>String(r?.rawValue||'').trim()!==''):false});
+      if(results?.length){
+        const raw=String(results[0].rawValue||'').trim();
+        if(raw){
+          const now=Date.now();
+          if(raw!==cam.lastCode||now-cam.lastAt>1500){
+            cam.lastCode=raw; cam.lastAt=now;
+            if(el.status)el.status.textContent='Код распознан: '+raw;
+            scannerDiag('code-detected',{code:raw,format:results[0].format||'',context:RM.scanContext||'products'});
+            stopScannerCamera('code-detected');
+            processStage14ScannerCode(raw);
+            cam.busy=false; return;
+          }
+        }else{
+          scannerDiag('detect-no-rawValue',{count:results.length,format:results[0]?.format||''});
+        }
+      }
+    }catch(err){scannerDiag('decode-error',{name:err?.name||'',message:err?.message||String(err||'')});}
+    cam.busy=false; if(cam.running)requestAnimationFrame(scanCameraFrame);
+  }
+ document.addEventListener('click',e=>{
+    const start=e.target.closest('[data-screen="scanner"] [data-scanner-start]');
+    if(start){scannerDiag('camera-button-click',{context:RM.scanContext||'products'});startScannerCamera();return;}
+    const manual=e.target.closest('[data-screen="scanner"] [data-scanner-manual]');
+    if(manual){
+      stopScannerCamera('manual-input');
+      const box=document.getElementById('scanResult');
+      if(box){
+        box.innerHTML='<div class="card">'+
+          '<label class="text-xs font-semibold text-slate-500">Штрихкод / QR</label>'+
+          '<input id="stage14ManualScan" class="w-full border border-slate-200 rounded-xl p-3 mt-2" inputmode="text" autocomplete="off" placeholder="Введите код">'+
+          '<button class="btn-primary w-full mt-2" type="button" id="stage14ManualScanBtn">Найти</button>'+
+          '</div>';
+        const input=document.getElementById('stage14ManualScan');
+        const submit=()=>{const v=input?.value?.trim()||''; if(v) processStage14ScannerCode(v); else toastRM('Введите код');};
+        document.getElementById('stage14ManualScanBtn')?.addEventListener('click',submit);
+        input?.addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();submit();}});
+        input?.focus();
+      }
+    }
   });
-
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)stopScannerCamera('page-hidden');});
   renderLiteCook();
   updateLiteSelectionVisuals();
   // FIX1: product filter/sort state must be initialized before the first render.
@@ -3168,6 +3378,11 @@
     if(!p){toastRM('Выберите продукт из списка');return;}
     p.name=name; p.batches=p.batches||[];
     if(p.batches[0]) p.batches[0].qty=qty; else p.batches.push({id:'b_'+Date.now(),qty,unit:'pcs',source:'manual'});
+    if(RM_SCANNER_PENDING_CODE){
+      p.barcode=RM_SCANNER_PENDING_CODE;
+      p.barcodes=Array.from(new Set([...(Array.isArray(p.barcodes)?p.barcodes:[]),RM_SCANNER_PENDING_CODE]));
+      RM_SCANNER_PENDING_CODE='';
+    }
     closeProductEdit(); renderProductsCore(); toastRM(`«${p.name}» сохранён`);
   }
 
@@ -3637,5 +3852,6 @@ if ('serviceWorker' in navigator) {
 .products-toolbar-btn{justify-content:center;border-radius:12px !important;}
 .products-toolbar-add{display:flex;align-items:center;justify-content:center;font-weight:700;border-radius:12px !important;}
 </style>
+  <script src="./src/web/diagnostics.js"></script>
 </body>
 </html>
