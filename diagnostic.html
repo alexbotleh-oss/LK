@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Б77 — Диагностика приложения</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:0;padding:16px;background:#f3f4f6}
+button{padding:10px 14px;margin:4px;border:0;border-radius:10px}
+#app{width:100%;height:70vh;border:1px solid #aaa;border-radius:12px;background:#fff}
+pre{white-space:pre-wrap;max-height:240px;overflow:auto;background:#111;color:#ddd;padding:12px;border-radius:10px}
+</style>
+</head>
+<body>
+<h2>Б77 — диагностика приложения</h2>
+<p>Запускает Stage14 в том же HTTPS-контуре и подключает наблюдатель без изменения его бизнес-логики.</p>
+<button id="snap">Снимок</button>
+<button id="download">Экспорт диагностики</button>
+<pre id="out">Ожидание загрузки…</pre>
+<iframe id="app" src="./stage14.html" allow="camera; microphone"></iframe>
+<script>
+const frame=document.getElementById("app"), out=document.getElementById("out");
+function report(){
+  try{
+    const d=frame.contentWindow.B77Diag;
+    if(!d){out.textContent="B77Diag ещё не установлен";return;}
+    out.textContent=JSON.stringify(d.report(),null,2);
+  }catch(e){out.textContent="DIAGNOSTIC_ERROR: "+e;}
+}
+frame.addEventListener("load",function(){
+  try{
+    const doc=frame.contentDocument;
+    const s=doc.createElement("script");
+    s.src="./src/web/diagnostics.js";
+    s.onload=function(){
+      frame.contentWindow.B77Diag.install();
+      report();
+    };
+    s.onerror=function(){out.textContent="Не удалось загрузить diagnostics.js";};
+    doc.head.appendChild(s);
+  }catch(e){out.textContent="Не удалось подключить диагностику: "+e;}
+});
+document.getElementById("snap").onclick=report;
+document.getElementById("download").onclick=function(){
+  try{frame.contentWindow.B77Diag.download();}catch(e){out.textContent="EXPORT_ERROR: "+e;}
+};
+setInterval(report,2000);
+</script>
+</body>
+</html>
